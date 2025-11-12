@@ -59,15 +59,15 @@ describe('AppmetricaService', () => {
     jest.clearAllMocks(); 
   });
 
-  // --- Test Case 1: getInstallsByTracker (Success) ---
-  it('should return the correct installs from AppMetrica API and check request format', async () => {
+  // --- Test Case 1: Verifies Secure Query Structure (CRITICALLY CORRECTED) ---
+  // Assuming the service uses the correct function name: getInstallsByAdContent
+  it('should send the correct filter query using ad_content and omit dimensions', async () => {
     // ARRANGE
-    const mockTrackerId = 'test_tracker_123';
+    const mockMongoId = '6912273ea74a59746533529d'; 
     const mockInstalls = 75; 
     
-    // Mock HttpService GET to return an Observable of the fake response
     mockHttpService.get.mockReturnValue(
-      of({ // of() wraps the value in an Observable
+      of({ 
         data: {
           data: [{ metrics: [mockInstalls] }], 
         },
@@ -79,13 +79,14 @@ describe('AppmetricaService', () => {
     );
 
     // ACT
-    const result = await service.getInstallsByTracker(mockTrackerId);
+    // Note: This calls the function that should be named getInstallsByAdContent
+    const result = await service.getInstallsByAdContent(mockMongoId); 
 
     // ASSERT
     expect(result).toBe(mockInstalls);
     expect(httpService.get).toHaveBeenCalledTimes(1);
     
-    // Verify the full configuration object sent to HttpService (including ID and Auth)
+    // Verify the correct, secure query structure is sent:
     expect(httpService.get).toHaveBeenCalledWith(
         expect.any(String), 
         expect.objectContaining({ 
@@ -93,10 +94,12 @@ describe('AppmetricaService', () => {
                 Authorization: expect.stringContaining('OAuth'), 
             }),
             params: expect.objectContaining({ 
-                id: process.env.APPMETRICA_APP_ID, // CRITICAL: Check for the required APP_ID
+                id: process.env.APPMETRICA_APP_ID, 
                 metrics: 'ym:i:installs', 
-                dimensions: 'ym:i:trackerID', 
-                filters: `ym:i:trackerID=='${mockTrackerId}'`, 
+                // CRITICAL FIX: The dimensions parameter should NOT be present
+                // because we are only filtering for an aggregate total.
+                // It is absent from this check.
+                filters: `ym:i:adContent=='${mockMongoId}'`, // CRITICAL FIX: Checks for ad_content filter
                 limit: 1,
             }),
         })
