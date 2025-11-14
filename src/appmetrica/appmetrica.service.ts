@@ -1,4 +1,10 @@
-import { Injectable, InternalServerErrorException, NotFoundException, Logger } from '@nestjs/common';
+// appmetrica.service.ts
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Document } from 'mongoose';
@@ -9,103 +15,153 @@ import { lastValueFrom } from 'rxjs';
 export class AppmetricaService {
   private readonly logger = new Logger(AppmetricaService.name);
 
-  // --- Configuration (Assumed from env) ---
-  private readonly BASE_URL = 'https://api.appmetrica.yandex.ru/stat/v1/data';
+  private readonly BASE_URL =
+    'https://api.appmetrica.yandex.com/v2/user/acquisition';
+
   private readonly APP_ID = process.env.APPMETRICA_APP_ID;
-  private readonly OAUTH_TOKEN = process.env.APP_METRICA_AUTH_TOKEN; 
-  private readonly MASTER_TRACKER_ID = process.env.APPMETRICA_MASTER_TRACKER_ID; 
-  private readonly TRACKING_BASE_URL = 'https://redirect.appmetrica.yandex.com/serve/'; 
+  private readonly PUBLISHER = process.env.APPMETRICA_PUBLISHER;
+  private readonly CAMPAIGN = process.env.APPMETRICA_CAMPAIGN;
+  private readonly INSTALL_TYPE = process.env.APPMETRICA_INSTALL_TYPE;
+  private readonly OAUTH_TOKEN = process.env.APP_METRICA_AUTH_TOKEN;
+  private readonly MASTER_TRACKER_ID = process.env.APPMETRICA_MASTER_TRACKER_ID;
+
+  private readonly TRACKING_BASE_URL =
+    'https://redirect.appmetrica.yandex.com/serve/';
 
   constructor(
-    @InjectModel(Influencer.name) private influencerModel: Model<Influencer & Document>,
-    private readonly httpService: HttpService, 
-  ) {
-    if (!this.OAUTH_TOKEN || !this.APP_ID || !this.MASTER_TRACKER_ID) {
-      this.logger.error("CRITICAL CONFIG ERROR: APPMETRICA_APP_ID, OAUTH_TOKEN, or MASTER_TRACKER_ID is missing!");
-    }
-  }
+    @InjectModel(Influencer.name)
+    private influencerModel: Model<Influencer & Document>,
+    private readonly httpService: HttpService,
+  ) { }
 
   /**
-   * Fetches install count from AppMetrica using the influencer ID as an ad identifier.
-  
-   * @param influencerMongoId The MongoDB _id of the influencer, used as the unique ad value.
+   * Fetch installs & clicks via correct AppMetrica parameters
    */
   async getInstallsByAd(influencerMongoId: string): Promise<number> {
-    if (!this.OAUTH_TOKEN || !this.APP_ID || !this.MASTER_TRACKER_ID) {
-      return 0;
-    }
-
     try {
-      const request$ = this.httpService.get(this.BASE_URL, {
-        headers: { 
-          Authorization: `OAuth ${this.OAUTH_TOKEN}`,
-        },
-        params: {
-          ids: this.APP_ID,                 // ✅ Must be plural "ids"
-          metrics: 'ym:i:installDevices',   // ✅ Valid metric
-          dimensions: 'ym:i:publisher',            // ✅ Valid dimension
-          filters: `ym:i:ad_content=='${influencerMongoId}'`, // ✅ Valid filter
-          date_since: '2024-01-01',
-          date_until: 'today',
-          limit: 1,
-          lang: 'en',
-        },
-      });
+      const params = {
+        id: this.APP_ID,
+        ids: this.APP_ID,
+        date1: '2024-01-01',
+        date2: 'today',
+        group: 'Day',
 
-      const res = await lastValueFrom(request$);
-      const installs = res.data.data?.[0]?.metrics?.[0] || 0;
-      return Number(installs);
+        // correct metrics
+        metrics:
+          'impressions,clicks,devices,deeplinks,conversion,sessions',
 
-    } catch (err: any) {
+        // only ad_content dimension (as per your request URL)
+        dimensions: "urlParameter{'ad_content'}",
+
+        limit: 10000,
+        accuracy: 'medium',
+        include_undefined: true,
+        currency: 'RUB',
+        sort: '-devices',
+
+        // ONLY valid source
+        source: 'installation',
+
+        lang: 'en',
+        request_domain: 'com',
+
+        // 🔥 CRITICAL — MATCHES YOUR WORKING API URL EXACTLY
+        filters: `(
+            publisher=='${this.PUBLISHER}' 
+            AND campaign=='${this.CAMPAIGN}' 
+            AND installType=='${this.INSTALL_TYPE}'
+        )`,
+      };
+
+      const response = await lastValueFrom(
+        this.httpService.get(this.BASE_URL, {
+          headers: { Authorization: `OAuth ${this.OAUTH_TOKEN}` },
+          params,
+        }),
+      );
+
+      const rows = response.data?.data || [];
+      //this.logger.log("📌 FULL APIMETRICA RESPONSE:");
+      //this.logger.log(JSON.stringify(rows, null, 2));
+
+      // row MUST match influencer _id
+      const matchedRow = rows.find(
+        (row: any) =>
+          String(row?.dimensions?.[0]?.name) === String(influencerMongoId) ||
+          String(row?.dimensions?.[0]?.value) === String(influencerMongoId),
+      );
+
+      if (!matchedRow) {
+        this.logger.warn(`⚠ No AppMetrica row found for influencer ${influencerMongoId}`);
+        return 0;
+      }
+
+      // metrics index mapping:
+      // 0 = impressions
+      // 1 = clicks
+      // 2 = devices (installs)
+      const impressions = matchedRow.metrics?.[0] ?? 0;
+      const clicks = matchedRow.metrics?.[1] ?? 0;
+      const installs = matchedRow.metrics?.[2] ?? 0;
+
+      // Print results
+      this.logger.log(`📌 AD_CONTENT (Influencer ID): ${influencerMongoId}`);
+      this.logger.log(`📊 Impressions: ${impressions}`);
+      this.logger.log(`📌 Clicks: ${clicks}`);
+      this.logger.log(`📌 Installs: ${installs}`);
+
+      return installs;
+    } catch (error: any) {
       this.logger.error(
-        `AppMetrica API call failed for ad=${influencerMongoId}:`,
-        err.response?.data || err.message
+        `❌ AppMetrica API request failed`,
+        error.response?.data || error.message,
       );
       return 0;
     }
   }
 
+  //function to build the referral link
+  private buildReferralLink(influencerId: string): string {
+    return `https://${this.APP_ID}.redirect.appmetrica.yandex.com/?appmetrica_tracking_id=${this.MASTER_TRACKER_ID}&referrer=reattribution%3D1&ad_content=${influencerId}`;
+  }
+
+
+
   /**
-   * Fetch stats, calculate earnings, and update influencer document.
-   * @param influencerId The MongoDB _id of the influencer.
+   * Update influencer stats & calculate earnings
    */
   async getInfluencerStats(influencerId: string) {
     try {
-      // 1. Find influencer
-      const influencer = await this.influencerModel.findById(influencerId).exec();
+      const influencer = await this.influencerModel.findById(influencerId);
+
       if (!influencer) {
-        throw new NotFoundException(`Influencer with ID ${influencerId} not found.`);
+        throw new NotFoundException(
+          `Influencer with ID ${influencerId} not found.`,
+        );
       }
 
-      // 2. Fetch install count
       const installs = await this.getInstallsByAd(String(influencer._id));
 
-      // 3. Calculate earnings ($1 for every 20 installs)
       const eligibleGroups = Math.floor(installs / 20);
       const earnings = eligibleGroups * 1;
 
-      // 4. Generate referral link
-      const referralLink = `${this.TRACKING_BASE_URL}${this.MASTER_TRACKER_ID}?ad=${String(influencer._id)}`;
+      const referralLink = this.buildReferralLink(String(influencer._id));
 
-      // 5. Update influencer document
       influencer.installs = installs;
       influencer.earnings = earnings;
       await influencer.save();
 
-      // 6. Return data
       return {
         name: influencer.name,
         installs,
         earnings: earnings.toFixed(2),
         referralLink,
       };
-
-    } catch (e: any) {
-      if (e instanceof NotFoundException) {
-        throw e;
-      }
-      this.logger.error('CRITICAL SERVICE EXECUTION FAILURE:', e.message, e.stack);
-      throw new InternalServerErrorException("Error processing influencer statistics. Check server logs for details.");
+    } catch (error: any) {
+      this.logger.error('Service failure:', error.message);
+      throw new InternalServerErrorException(
+        'Error calculating influencer stats',
+      );
     }
   }
 }
