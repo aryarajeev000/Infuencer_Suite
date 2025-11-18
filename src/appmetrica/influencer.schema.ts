@@ -17,6 +17,10 @@ export class Influencer extends Document {
 
   @Prop({ default: 0 })
   earnings: number;
+
+  // ⭐ NEW FIELD – REQUIRED for "register" event tracking
+  @Prop({ default: 0 })
+  registrations: number;
 }
 
 export const InfluencerSchema = SchemaFactory.createForClass(Influencer);
