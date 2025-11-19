@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
-import { AppmetricaModule } from './appmetrica/appmetrica.module';
+import { AppmetricaModule } from './appmetrica/modules/appmetrica.module';
 
 @Module({
   imports: [
@@ -10,4 +10,4 @@ import { AppmetricaModule } from './appmetrica/appmetrica.module';
     AppmetricaModule,
   ],
 })
-export class AppModule {}
+export class AppModule { }
